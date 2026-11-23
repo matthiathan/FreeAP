@@ -6,11 +6,24 @@
 <title>FreeAP | Arduino Wi-Fi lab</title>
 <style>
 :root{color-scheme:dark;font:17px/1.6 system-ui,sans-serif;background:#101712;color:#e7eee8}body{margin:0}main{max-width:650px;margin:auto;padding:clamp(28px,8vw,100px) 22px}h1{font-size:clamp(3rem,11vw,6rem);line-height:1;margin:0;color:#b9faaa;letter-spacing:-.065em}h2{font-size:1.15rem}p{color:#c5d0c6}section{border-top:1px solid #435347;margin-top:30px;padding-top:12px}li+li{margin-top:8px}code{color:#b9faaa;overflow-wrap:anywhere}a{color:#b9faaa;text-underline-offset:4px}a:focus-visible{outline:2px solid #b9faaa;outline-offset:4px}
+form{display:grid;gap:10px;max-width:360px}input,button{font:inherit;padding:9px;border:1px solid #657766;border-radius:6px}input{background:#18201a;color:inherit}button{background:#b9faaa;color:#101712;cursor:pointer}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px;border-bottom:1px solid #435347}.table{overflow:auto}label{display:grid;gap:4px} [hidden]{display:none!important}
 </style>
 </head>
 <body><main>
 <h1>FreeAP</h1>
 <p>A local Wi-Fi lab running on an Arduino UNO R4 WiFi with an Air780EU modem for SMS commands.</p>
+<section><h2>Device dashboard</h2>
+<form id="login">
+  <label>Email <input name="email" type="email" autocomplete="username" required></label>
+  <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+  <button>Sign in</button>
+</form>
+<p id="status" role="status"></p>
+<div id="dashboard" hidden>
+  <button id="refresh">Refresh</button> <button id="logout">Sign out</button>
+  <div class="table"><table><thead><tr><th>Device</th><th>Last seen</th><th>Uplink</th><th>Signed in</th><th>Signal</th></tr></thead><tbody id="devices"></tbody></table></div>
+</div>
+</section>
 <section><h2>Open the device portal</h2>
 <ol><li>Join <strong>BACKUP-Lab</strong> using the Wi-Fi passphrase set in the sketch.</li>
 <li>If the sign-in prompt doesn’t appear, open the AP address printed in Arduino Serial Monitor at <strong>115200 baud</strong>.</li>
@@ -19,4 +32,76 @@
 <section><h2>SMS commands</h2>
 <p>Text <code>HELP</code> to the modem SIM from your configured admin number to see the command list.</p>
 <p><a href="https://github.com/matthiathan/FreeAP">Source on GitHub</a></p></section>
-</main></body></html>
+</main>
+<script type="module">
+const endpoint = "https://phcsslnsofaojnnxwrrj.supabase.co";
+const publishableKey = "sb_publishable_P4klXq8ECCIgpeJCUQN2nw_bLcY9ZFh";
+const login = document.querySelector('#login');
+const status = document.querySelector('#status');
+const dashboard = document.querySelector('#dashboard');
+const devices = document.querySelector('#devices');
+let accessToken = '';
+
+async function loadDevices() {
+  const token = accessToken;
+  status.textContent = 'Loading device status…';
+  try {
+    const response = await fetch(endpoint + '/rest/v1/freeap_device_status?select=device_id,last_seen,uplink,signed_in,signal&order=last_seen.desc&limit=100', {
+      headers: { apikey: publishableKey, Authorization: 'Bearer ' + token },
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error('Device status unavailable. Sign in again if your session has expired.');
+    const rows = await response.json();
+    if (token !== accessToken) return;
+    devices.replaceChildren();
+    for (const device of rows) {
+      const row = devices.insertRow();
+      for (const value of [device.device_id, new Date(device.last_seen).toLocaleString(), device.uplink, device.signed_in, device.signal ?? '—']) {
+        row.insertCell().textContent = value;
+      }
+    }
+    status.textContent = rows.length ? '' : 'No device check-ins yet.';
+  } catch (error) {
+    if (token === accessToken) status.textContent = error instanceof TypeError ? 'Could not reach the dashboard backend.' : error.message;
+  }
+}
+
+login.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = login.querySelector('button');
+  button.disabled = true;
+  status.textContent = 'Signing in…';
+  try {
+    const response = await fetch(endpoint + '/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      headers: { apikey: publishableKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.fromEntries(new FormData(login)))
+    });
+    if (!response.ok) throw new Error('Sign-in failed. Check your dashboard email and password.');
+    const session = await response.json();
+    if (session.user?.app_metadata?.freeap_admin !== true) throw new Error('This account does not have FreeAP admin access.');
+    accessToken = session.access_token;
+    login.reset();
+    login.hidden = true;
+    dashboard.hidden = false;
+    await loadDevices();
+  } catch (error) {
+    status.textContent = error instanceof TypeError ? 'Could not reach the sign-in service.' : error.message;
+  } finally {
+    login.elements.password.value = '';
+    button.disabled = false;
+  }
+});
+document.querySelector('#refresh').addEventListener('click', loadDevices);
+document.querySelector('#logout').addEventListener('click', () => {
+  const token = accessToken;
+  accessToken = '';
+  devices.replaceChildren();
+  dashboard.hidden = true;
+  login.hidden = false;
+  status.textContent = '';
+  void fetch(endpoint + '/auth/v1/logout?scope=local', {
+    method: 'POST', headers: { apikey: publishableKey, Authorization: 'Bearer ' + token }
+  }).catch(() => {});
+});
+</script></body></html>
