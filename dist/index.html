@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeAP | Arduino Wi-Fi lab</title>
+<style>
+:root{color-scheme:dark;font:17px/1.6 system-ui,sans-serif;background:#101712;color:#e7eee8}body{margin:0}main{max-width:650px;margin:auto;padding:clamp(28px,8vw,100px) 22px}h1{font-size:clamp(3rem,11vw,6rem);line-height:1;margin:0;color:#b9faaa;letter-spacing:-.065em}h2{font-size:1.15rem}p{color:#c5d0c6}section{border-top:1px solid #435347;margin-top:30px;padding-top:12px}li+li{margin-top:8px}code{color:#b9faaa;overflow-wrap:anywhere}a{color:#b9faaa;text-underline-offset:4px}a:focus-visible{outline:2px solid #b9faaa;outline-offset:4px}
+</style>
+</head>
+<body><main>
+<h1>FreeAP</h1>
+<p>A local Wi-Fi lab running on an Arduino UNO R4 WiFi with an Air780EU modem for SMS commands.</p>
+<section><h2>Open the device portal</h2>
+<ol><li>Join <strong>BACKUP-Lab</strong> using the Wi-Fi passphrase set in the sketch.</li>
+<li>If the sign-in prompt doesn’t appear, open the AP address printed in Arduino Serial Monitor at <strong>115200 baud</strong>.</li>
+<li>Enter a temporary test number. Retrieve the device-issued lab code with <code>PASSWORD &lt;phone number&gt;</code> and enter it on the device portal.</li></ol>
+<p>Open <code>/admin</code> on the Arduino’s AP address to view lab sessions and sign-in results.</p></section>
+<section><h2>SMS commands</h2>
+<p>Text <code>HELP</code> to the modem SIM from your configured admin number to see the command list.</p>
+<p><a href="https://github.com/matthiathan/FreeAP">Source on GitHub</a></p></section>
+</main></body></html>
