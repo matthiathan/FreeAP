@@ -1,118 +1,48 @@
-<!doctype html><html lang="en-ZA"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alarm Clock</title>
-<style>
-:root{color-scheme:dark;font:16px/1.55 system-ui,sans-serif;background:#111719;color:#eaf1ed}body{margin:0}main{max-width:560px;margin:auto;padding:clamp(24px,7vw,72px) 22px}h1{font-size:clamp(3rem,10vw,5rem);line-height:1;letter-spacing:-.065em;margin:0 0 20px}p{color:#b7c8c1}form{display:grid;gap:12px}label{display:grid;gap:4px}input,button{font:inherit;padding:10px 12px;border-radius:7px;border:1px solid #557067}input{background:#1c2727;color:inherit}button{color:#112722;background:#b8f4d7;cursor:pointer}button:disabled{opacity:.55}button.secondary{background:transparent;color:#b8f4d7}ol{padding:0;list-style:none}li{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #40524d;padding:12px 0}time{font-size:2rem;font-variant-numeric:tabular-nums}section{margin-top:26px}button:focus-visible,input:focus-visible{outline:2px solid #b8f4d7;outline-offset:3px}[hidden]{display:none!important}
-</style></head><body><main>
-<h1>Alarm Clock</h1><p>Daily alarms · South African time (SAST)</p>
-<form id="login">
-<label>Email <input type="email" name="email" autocomplete="username" required></label>
-<label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-<button>Sign in</button>
-</form>
-<p id="status" role="status"></p>
-<section id="clock" hidden>
-<form id="new"><label>Alarm time <input name="time" type="time" required></label><button>Add alarm</button></form>
-<h2>Daily alarms</h2><ol id="list"></ol>
-<button id="logout" class="secondary">Sign out</button>
-<p>While online, the clock checks for changes about once a minute.</p>
-</section></main>
+<!doctype html><html lang="en-ZA"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Staff Attendance</title><style>
+:root{font:16px/1.5 system-ui;background:#f2f5f3;color:#182a25}main{max-width:900px;margin:40px auto;padding:0 18px}section,form{background:white;padding:20px;border-radius:12px;margin:16px 0}section form{padding:0}label{display:block;margin:8px 0}input,button{font:inherit;padding:8px;border:1px solid #769188;border-radius:6px}button{background:#16473a;color:white;cursor:pointer}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:8px;border-bottom:1px solid #dce5df}.scroll{overflow:auto}[hidden]{display:none}
+</style><main><h1>Staff Attendance</h1><form id="login"><label>Email <input type="email" name="email" autocomplete="username" required></label><label>Password <input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form><p id="status" role="status"></p><div id="admin" hidden><button id="refresh">Refresh</button> <button id="logout">Sign out</button><section><h2>Add staff member</h2><form id="staff"><label>Name <input name="first_name" maxlength="100" required></label><label>Surname <input name="surname" maxlength="100" required></label><label>Email <input name="email" type="email" maxlength="254" required></label><label>RFID UID <input name="card_uid" maxlength="20" pattern="[A-Fa-f0-9]{8}|[A-Fa-f0-9]{14}|[A-Fa-f0-9]{20}" required></label><p>Copy the UID from the scanner's Serial Monitor. After saving, scan the dedicated blank card again to enroll it.</p><button>Add staff member</button></form></section><section><h2>Staff</h2><div class="scroll"><table><thead><tr><th>Name</th><th>Email</th><th>Card UID</th></tr></thead><tbody id="people"></tbody></table></div></section><section><h2>Clock history</h2><p id="history-caption">Latest scans in South African time</p><div class="scroll"><table><thead><tr><th>Name</th><th>Direction</th><th>Date and time</th></tr></thead><tbody id="history"></tbody></table></div><button id="newer">Newer</button> <button id="older">Older</button></section></div></main>
 <script type="module">
-const url = 'https://phcsslnsofaojnnxwrrj.supabase.co';
-const key = "sb_publishable_P4klXq8ECCIgpeJCUQN2nw_bLcY9ZFh";
-const login = document.querySelector('#login');
-const clock = document.querySelector('#clock');
-const newAlarm = document.querySelector('#new');
-const status = document.querySelector('#status');
-const list = document.querySelector('#list');
-let token = '';
-let busy = false;
-
-function timeLabel(minute) {
-  return String(Math.floor(minute / 60)).padStart(2, '0') + ':' + String(minute % 60).padStart(2, '0');
+const base='https://phcsslnsofaojnnxwrrj.supabase.co';
+const key="sb_publishable_P4klXq8ECCIgpeJCUQN2nw_bLcY9ZFh";
+const el = id => document.getElementById(id);
+const login=el('login'), staff=el('staff'), status=el('status');
+let token='', busy=false, page=0;
+const formatter=new Intl.DateTimeFormat('en-ZA',{timeZone:'Africa/Johannesburg',dateStyle:'medium',timeStyle:'medium'});
+async function api(path, method='GET', body) {
+ const response=await fetch(base+path,{method,cache:'no-store',headers:{apikey:key,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})});
+ if(!response.ok) throw new Error(response.status===409?'That email or card is already assigned.':response.status===401?'Sign-in failed or expired.':'Request failed ('+response.status+').');
+ return response.status===204||method==='POST'&&path.startsWith('/rest')?null:response.json();
 }
-function api(path, options = {}) {
-  return fetch(url + path, {
-    ...options,
-    headers: { apikey: key, 'Content-Type': 'application/json',
-      ...(token ? { Authorization: 'Bearer ' + token } : {}), ...options.headers },
-    cache: 'no-store'
-  });
+function rows(id,items,empty){
+ const table=el(id); table.replaceChildren();
+ for(const values of items.length?items:[[empty]]){
+  const tr=table.insertRow(); for(const value of values) tr.insertCell().textContent=value;
+ }
 }
-async function loadAlarms() {
-  const response = await api('/rest/v1/freeap_alarms?select=minute_of_day&order=minute_of_day');
-  if (!response.ok) throw new Error('Could not load alarms. Sign in again if your session expired.');
-  const alarms = await response.json();
-  list.replaceChildren();
-  if (!alarms.length) list.append(Object.assign(document.createElement('li'), { textContent: 'No alarms scheduled.' }));
-  for (const { minute_of_day: minute } of alarms) {
-    const row = document.createElement('li');
-    const time = document.createElement('time');
-    time.dateTime = time.textContent = timeLabel(minute);
-    const remove = document.createElement('button');
-    remove.className = 'secondary';
-    remove.textContent = 'Remove';
-    remove.setAttribute('aria-label', 'Remove ' + time.textContent + ' alarm');
-    remove.addEventListener('click', () => changeAlarm('DELETE', minute));
-    row.append(time, remove);
-    list.append(row);
-  }
+async function refresh(){
+ const [people,events]=await Promise.all([api('/rest/v1/attendance_staff?select=first_name,surname,email,card_uid&order=surname,first_name'),api('/rest/v1/attendance_events?select=direction,scanned_at,attendance_staff(first_name,surname)&order=id.desc&limit=51&offset='+page*50)]);
+ rows('people',people.map(p=>[p.first_name+' '+p.surname,p.email,p.card_uid]),'No staff added.');
+ rows('history',events.slice(0,50).map(e=>[e.attendance_staff?e.attendance_staff.first_name+' '+e.attendance_staff.surname:'Staff member',e.direction==='in'?'Clock in':'Clock out',formatter.format(new Date(e.scanned_at))]),'No scans recorded.');
+ el('newer').disabled=page===0; el('older').disabled=events.length<51;
 }
-async function changeAlarm(method, minute) {
-  if (busy) return;
-  busy = true;
-  status.textContent = 'Saving…';
-  try {
-    const response = await api('/rest/v1/freeap_alarms' + (method === 'DELETE' ? '?minute_of_day=eq.' + minute : ''), {
-      method, body: method === 'POST' ? JSON.stringify({ minute_of_day: minute }) : undefined
-    });
-    if (response.status === 409) throw new Error('An alarm already exists at that time.');
-    if (!response.ok) throw new Error('Could not save the change.');
-    if (method === 'POST') newAlarm.reset();
-    await loadAlarms();
-    status.textContent = 'Schedule saved.';
-  } catch (error) {
-    status.textContent = error.message;
-  } finally {
-    busy = false;
-  }
+async function run(work){
+ if(busy)return;busy=true;status.textContent='';
+ try{await work();}catch(e){status.textContent=e.message;}finally{busy=false;}
 }
-login.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (busy) return;
-  busy = true;
-  status.textContent = 'Signing in…';
-  try {
-    const response = await api('/auth/v1/token?grant_type=password', {
-      method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(login)))
-    });
-    if (!response.ok) throw new Error('Sign-in failed.');
-    const session = await response.json();
-    if (session.user?.app_metadata?.freeap_admin !== true) throw new Error('Clock admin access is required.');
-    token = session.access_token;
-    await loadAlarms();
-    login.reset();
-    login.hidden = true;
-    clock.hidden = false;
-    status.textContent = '';
-  } catch (error) {
-    token = '';
-    status.textContent = error.message;
-  } finally {
-    login.elements.password.value = '';
-    busy = false;
-  }
-});
-newAlarm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const [hours, minutes] = newAlarm.elements.time.value.split(':').map(Number);
-  changeAlarm('POST', hours * 60 + minutes);
-});
-document.querySelector('#logout').addEventListener('click', () => {
-  if (busy) return;
-  void api('/auth/v1/logout?scope=local', {method:'POST'}).catch(() => {});
-  token = '';
-  list.replaceChildren();
-  clock.hidden = true;
-  login.hidden = false;
-  status.textContent = 'Signed out.';
-});
-</script></body></html>
+login.onsubmit=e=>{e.preventDefault();void run(async()=>{
+ try{
+  const session=await api('/auth/v1/token?grant_type=password','POST',Object.fromEntries(new FormData(login)));
+  if(session.user?.app_metadata?.freeap_admin!==true)throw new Error('Admin access is required.');
+  token=session.access_token;await refresh();login.reset();login.hidden=true;el('admin').hidden=false;
+ }catch(error){token='';throw error;}finally{login.elements.password.value='';}
+});};
+staff.onsubmit=e=>{e.preventDefault();void run(async()=>{
+ const person=Object.fromEntries(new FormData(staff));for(const field in person)person[field]=person[field].trim();
+ person.card_uid=person.card_uid.toUpperCase();await api('/rest/v1/attendance_staff','POST',person);staff.reset();
+ await refresh();status.textContent='Staff member saved. Scan their card again to enroll it.';
+});};
+el('refresh').onclick=()=>run(async()=>{page=0;await refresh();});
+el('older').onclick=()=>run(async()=>{page++;try{await refresh();}catch(error){page--;throw error;}});
+el('newer').onclick=()=>run(async()=>{if(page===0)return;page--;try{await refresh();}catch(error){page++;throw error;}});
+el('logout').onclick=()=>run(async()=>{try{await api('/auth/v1/logout?scope=local','POST');}finally{token='';page=0;el('admin').hidden=true;login.hidden=false;el('people').replaceChildren();el('history').replaceChildren();}});
+</script>
