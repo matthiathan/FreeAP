@@ -12,6 +12,16 @@ form{display:grid;gap:10px;max-width:360px}input,button{font:inherit;padding:9px
 <body><main>
 <h1>FreeAP</h1>
 <p>A local Wi-Fi lab running on an Arduino UNO R4 WiFi with an Air780EU modem for SMS commands.</p>
+<section><h2>FreeAP account</h2>
+<form id="guest-account">
+  <label>Cell number <input type="tel" name="phone" autocomplete="tel" placeholder="+27…" maxlength="24" required></label>
+  <label>FreeAP password <input type="password" name="password" autocomplete="current-password" required></label>
+  <button type="submit" value="signin">Sign in</button>
+  <button type="submit" value="signup">Create account</button>
+</form>
+<button type="button" id="guest-logout" hidden>Sign out</button>
+<p id="guest-state" role="status"></p>
+</section>
 <section><h2>Device dashboard</h2>
 <form id="login">
   <label>Email <input name="email" type="email" autocomplete="username" required></label>
@@ -25,9 +35,9 @@ form{display:grid;gap:10px;max-width:360px}input,button{font:inherit;padding:9px
 </div>
 </section>
 <section><h2>Open the device portal</h2>
-<ol><li>Join <strong>BACKUP-Lab</strong> using the Wi-Fi passphrase set in the sketch.</li>
+<ol><li>Join <strong>BACKUP-Lab</strong> from your Wi-Fi settings.</li>
 <li>If the sign-in prompt doesn’t appear, open the AP address printed in Arduino Serial Monitor at <strong>115200 baud</strong>.</li>
-<li>Enter a temporary test number. Retrieve the device-issued lab code with <code>PASSWORD &lt;phone number&gt;</code> and enter it on the device portal.</li></ol>
+<li>Enter a cell number to connect to the local demo. This portal works offline. FreeAP accounts are managed on this HTTPS page.</li></ol>
 <p>Open <code>/admin</code> on the Arduino’s AP address to view lab sessions and sign-in results.</p></section>
 <section><h2>SMS commands</h2>
 <p>Text <code>HELP</code> to the modem SIM from your configured admin number to see the command list.</p>
@@ -36,6 +46,76 @@ form{display:grid;gap:10px;max-width:360px}input,button{font:inherit;padding:9px
 <script type="module">
 const endpoint = "https://phcsslnsofaojnnxwrrj.supabase.co";
 const publishableKey = "sb_publishable_P4klXq8ECCIgpeJCUQN2nw_bLcY9ZFh";
+const guestForm = document.querySelector('#guest-account');
+const guestLogout = document.querySelector('#guest-logout');
+const guestState = document.querySelector('#guest-state');
+let guestToken = '';
+
+function normalizePhone(raw) {
+  const phone = raw.trim().replace(/[ .()-]/g, '');
+  return /^0[0-9]{9}$/.test(phone) ? '+27' + phone.slice(1) : phone;
+}
+
+guestForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const signup = event.submitter?.value === 'signup';
+  const phone = normalizePhone(guestForm.elements.phone.value);
+  const password = guestForm.elements.password.value;
+  if (!/^\+[1-9][0-9]{7,14}$/.test(phone)) {
+    guestState.textContent = 'Enter a South African cell number or a number with its country code.';
+    return;
+  }
+  if (signup && (password.length < 8 || new TextEncoder().encode(password).length > 72)) {
+    guestState.textContent = 'Choose a FreeAP password of at least 8 characters and at most 72 bytes.';
+    return;
+  }
+  const buttons = guestForm.querySelectorAll('button');
+  for (const button of buttons) button.disabled = true;
+  guestState.textContent = signup ? 'Creating account…' : 'Signing in…';
+  try {
+    const path = signup ? '/signup' : '/token?grant_type=password';
+    const response = await fetch(endpoint + '/auth/v1' + path, {
+      method: 'POST',
+      headers: { apikey: publishableKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, password })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      if (data.error_code === 'phone_provider_disabled') {
+        guestState.textContent = 'Phone sign-in is disabled in FreeAPLAB.';
+      } else {
+        guestState.textContent = signup ? 'Account could not be created. If you already have an account, sign in.' : 'Sign-in failed. Check your cell number and password.';
+      }
+      return;
+    }
+    if (!data.access_token) {
+      guestState.textContent = 'Supabase requires phone confirmation before you can sign in.';
+      return;
+    }
+    guestToken = data.access_token;
+    guestForm.reset();
+    guestForm.hidden = true;
+    guestLogout.hidden = false;
+    guestState.textContent = 'Signed in to your FreeAP account.';
+  } catch {
+    guestState.textContent = 'Could not reach FreeAPLAB. Check your internet connection.';
+  } finally {
+    guestForm.elements.password.value = '';
+    for (const button of buttons) button.disabled = false;
+  }
+});
+
+guestLogout.addEventListener('click', () => {
+  const token = guestToken;
+  guestToken = '';
+  guestLogout.hidden = true;
+  guestForm.hidden = false;
+  guestState.textContent = 'Signed out.';
+  void fetch(endpoint + '/auth/v1/logout?scope=local', {
+    method: 'POST', headers: { apikey: publishableKey, Authorization: 'Bearer ' + token }
+  }).catch(() => {});
+});
+
 const login = document.querySelector('#login');
 const status = document.querySelector('#status');
 const dashboard = document.querySelector('#dashboard');
