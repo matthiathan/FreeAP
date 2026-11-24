@@ -12,13 +12,14 @@ form{display:grid;gap:10px;max-width:360px}input,button{font:inherit;padding:9px
 <body><main>
 <h1>FreeAP</h1>
 <p>A local Wi-Fi lab running on an Arduino UNO R4 WiFi with an Air780EU modem for SMS commands.</p>
-<section><h2>FreeAP account</h2>
+<section><h2 id="account">FreeAP account</h2>
 <form id="guest-account">
   <label>Cell number <input type="tel" name="phone" autocomplete="tel" placeholder="+27…" maxlength="24" required></label>
   <label>FreeAP password <input type="password" name="password" autocomplete="current-password" required></label>
   <button type="submit" value="signin">Sign in</button>
   <button type="submit" value="signup">Create account</button>
 </form>
+<button type="button" id="guest-retry" hidden>Retry recording completion</button>
 <button type="button" id="guest-logout" hidden>Sign out</button>
 <p id="guest-state" role="status"></p>
 </section>
@@ -32,12 +33,15 @@ form{display:grid;gap:10px;max-width:360px}input,button{font:inherit;padding:9px
 <div id="dashboard" hidden>
   <button id="refresh">Refresh</button> <button id="logout">Sign out</button>
   <div class="table"><table><thead><tr><th>Device</th><th>Last seen</th><th>Uplink</th><th>Signed in</th><th>Signal</th></tr></thead><tbody id="devices"></tbody></table></div>
+  <h3>Lab completions</h3>
+  <p id="completion-state" role="status"></p>
+  <div class="table"><table><thead><tr><th>Cell number</th><th>Last completion</th></tr></thead><tbody id="completions"></tbody></table></div>
 </div>
 </section>
 <section><h2>Open the device portal</h2>
 <ol><li>Join <strong>BACKUP-Lab</strong> from your Wi-Fi settings.</li>
 <li>If the sign-in prompt doesn’t appear, open the AP address printed in Arduino Serial Monitor at <strong>115200 baud</strong>.</li>
-<li>Enter a cell number to connect to the local demo. This portal works offline. FreeAP accounts are managed on this HTTPS page.</li></ol>
+<li>Enter a cell number to connect to the local demo. This portal works offline. Use the portal’s FreeAP account link to complete the lab over HTTPS.</li></ol>
 <p>Open <code>/admin</code> on the Arduino’s AP address to view lab sessions and sign-in results.</p></section>
 <section><h2>SMS commands</h2>
 <p>Text <code>HELP</code> to the modem SIM from your configured admin number to see the command list.</p>
@@ -50,6 +54,32 @@ const guestForm = document.querySelector('#guest-account');
 const guestLogout = document.querySelector('#guest-logout');
 const guestState = document.querySelector('#guest-state');
 let guestToken = '';
+const guestRetry = document.querySelector('#guest-retry');
+
+async function recordCompletion() {
+  const token = guestToken;
+  if (!token) return;
+  guestRetry.disabled = true;
+  try {
+    const response = await fetch(endpoint + '/rest/v1/rpc/freeap_record_completion', {
+      method: 'POST',
+      headers: { apikey: publishableKey, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    if (!response.ok) throw new Error();
+    if (guestToken !== token) return;
+    guestRetry.hidden = true;
+    guestState.textContent = 'Signed in. Lab completion recorded.';
+  } catch {
+    if (guestToken !== token) return;
+    guestRetry.hidden = false;
+    guestState.textContent = 'Signed in. FreeAP could not record the completion.';
+  } finally {
+    guestRetry.disabled = false;
+  }
+}
+
+guestRetry.addEventListener('click', recordCompletion);
 
 function normalizePhone(raw) {
   const phone = raw.trim().replace(/[ .()-]/g, '');
@@ -96,7 +126,7 @@ guestForm.addEventListener('submit', async (event) => {
     guestForm.reset();
     guestForm.hidden = true;
     guestLogout.hidden = false;
-    guestState.textContent = 'Signed in to your FreeAP account.';
+    await recordCompletion();
   } catch {
     guestState.textContent = 'Could not reach FreeAPLAB. Check your internet connection.';
   } finally {
@@ -109,6 +139,7 @@ guestLogout.addEventListener('click', () => {
   const token = guestToken;
   guestToken = '';
   guestLogout.hidden = true;
+  guestRetry.hidden = true;
   guestForm.hidden = false;
   guestState.textContent = 'Signed out.';
   void fetch(endpoint + '/auth/v1/logout?scope=local', {
@@ -121,6 +152,36 @@ const status = document.querySelector('#status');
 const dashboard = document.querySelector('#dashboard');
 const devices = document.querySelector('#devices');
 let accessToken = '';
+const completions = document.querySelector('#completions');
+const completionState = document.querySelector('#completion-state');
+
+async function loadCompletions() {
+  const token = accessToken;
+  if (!token) return;
+  completionState.textContent = 'Loading completions…';
+  try {
+    const response = await fetch(endpoint + '/rest/v1/freeap_lab_completions?select=cell_number,completed_at&order=completed_at.desc&limit=100', {
+      headers: { apikey: publishableKey, Authorization: 'Bearer ' + token },
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error();
+    const rows = await response.json();
+    if (token !== accessToken) return;
+    completions.replaceChildren();
+    for (const completion of rows) {
+      const row = completions.insertRow();
+      row.insertCell().textContent = completion.cell_number;
+      row.insertCell().textContent = new Date(completion.completed_at).toLocaleString();
+    }
+    completionState.textContent = rows.length ? '' : 'No lab completions recorded.';
+  } catch {
+    if (token === accessToken) completionState.textContent = 'Could not load lab completions.';
+  }
+}
+
+function refreshDashboard() {
+  return Promise.all([loadDevices(), loadCompletions()]);
+}
 
 async function loadDevices() {
   const token = accessToken;
@@ -164,7 +225,7 @@ login.addEventListener('submit', async (event) => {
     login.reset();
     login.hidden = true;
     dashboard.hidden = false;
-    await loadDevices();
+    await refreshDashboard();
   } catch (error) {
     status.textContent = error instanceof TypeError ? 'Could not reach the sign-in service.' : error.message;
   } finally {
@@ -172,12 +233,14 @@ login.addEventListener('submit', async (event) => {
     button.disabled = false;
   }
 });
-document.querySelector('#refresh').addEventListener('click', loadDevices);
+document.querySelector('#refresh').addEventListener('click', refreshDashboard);
 document.querySelector('#logout').addEventListener('click', () => {
   const token = accessToken;
   accessToken = '';
   devices.replaceChildren();
   dashboard.hidden = true;
+  completions.replaceChildren();
+  completionState.textContent = '';
   login.hidden = false;
   status.textContent = '';
   void fetch(endpoint + '/auth/v1/logout?scope=local', {
