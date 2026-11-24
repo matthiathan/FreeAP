@@ -19,12 +19,28 @@ function rows(id,items,empty){
   const tr=table.insertRow(); for(const value of values) tr.insertCell().textContent=value;
  }
 }
-async function refresh(){
- const [people,events]=await Promise.all([api('/rest/v1/attendance_staff?select=first_name,surname,email,card_uid&order=surname,first_name'),api('/rest/v1/attendance_events?select=direction,scanned_at,attendance_staff(first_name,surname)&order=id.desc&limit=51&offset='+page*50)]);
- rows('people',people.map(p=>[p.first_name+' '+p.surname,p.email,p.card_uid]),'No staff added.');
+async function refreshHistory(){
+ const events=await api('/rest/v1/attendance_events?select=direction,scanned_at,attendance_staff(first_name,surname)&order=id.desc&limit=51&offset='+page*50);
  rows('history',events.slice(0,50).map(e=>[e.attendance_staff?e.attendance_staff.first_name+' '+e.attendance_staff.surname:'Staff member',e.direction==='in'?'Clock in':'Clock out',formatter.format(new Date(e.scanned_at))]),'No scans recorded.');
  el('newer').disabled=page===0; el('older').disabled=events.length<51;
 }
+async function refresh(){
+ const people=await api('/rest/v1/attendance_staff?select=first_name,surname,email,card_uid&order=surname,first_name');
+ rows('people',people.map(p=>[p.first_name+' '+p.surname,p.email,p.card_uid]),'No staff added.');
+ await refreshHistory();
+}
+let historyPolling=false;
+setInterval(async()=>{
+ if(!token||el('admin').hidden||page!==0||busy||historyPolling)return;
+ historyPolling=true;
+ const currentToken=token;
+ try {
+  const events=await api('/rest/v1/attendance_events?select=direction,scanned_at,attendance_staff(first_name,surname)&order=id.desc&limit=51&offset='+0);
+  if(currentToken!==token||page!==0||busy)return;
+ rows('history',events.slice(0,50).map(e=>[e.attendance_staff?e.attendance_staff.first_name+' '+e.attendance_staff.surname:'Staff member',e.direction==='in'?'Clock in':'Clock out',formatter.format(new Date(e.scanned_at))]),'No scans recorded.');
+  el('newer').disabled=true; el('older').disabled=events.length<51;
+ }catch{}finally{historyPolling=false;}
+},2500);
 async function run(work){
  if(busy)return;busy=true;status.textContent='';
  try{await work();}catch(e){status.textContent=e.message;}finally{busy=false;}
