@@ -1,17 +1,17 @@
 <!doctype html><html lang="en-ZA"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Staff Attendance</title><style>
 :root{font:16px/1.5 system-ui;background:#f2f5f3;color:#182a25}main{max-width:900px;margin:40px auto;padding:0 18px}section,form{background:white;padding:20px;border-radius:12px;margin:16px 0}section form{padding:0}label{display:block;margin:8px 0}input,button{font:inherit;padding:8px;border:1px solid #769188;border-radius:6px}button{background:#16473a;color:white;cursor:pointer}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:8px;border-bottom:1px solid #dce5df}.scroll{overflow:auto}[hidden]{display:none}
-</style><main><h1>Staff Attendance</h1><form id="login"><label>Email <input type="email" name="email" autocomplete="username" required></label><label>Password <input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form><p id="status" role="status"></p><div id="admin" hidden><button id="refresh">Refresh</button> <button id="logout">Sign out</button><section><h2>Add staff member</h2><form id="staff"><label>Name <input name="first_name" maxlength="100" required></label><label>Surname <input name="surname" maxlength="100" required></label><label>Email <input name="email" type="email" maxlength="254" required></label><label>RFID UID <input name="card_uid" maxlength="20" pattern="[A-Fa-f0-9]{8}|[A-Fa-f0-9]{14}|[A-Fa-f0-9]{20}" required></label><p>Copy the UID from the scanner's Serial Monitor. After saving, scan the dedicated blank card again to enroll it.</p><button>Add staff member</button></form></section><section><h2>Staff</h2><div class="scroll"><table><thead><tr><th>Name</th><th>Email</th><th>Card UID</th></tr></thead><tbody id="people"></tbody></table></div></section><section><h2>Clock history</h2><p id="history-caption">Latest scans in South African time</p><div class="scroll"><table><thead><tr><th>Name</th><th>Direction</th><th>Date and time</th></tr></thead><tbody id="history"></tbody></table></div><button id="newer">Newer</button> <button id="older">Older</button></section></div></main>
+</style><main><h1>Staff Attendance</h1><form id="login"><label>Email <input type="email" name="email" autocomplete="username" required></label><label>Password <input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form><p id="status" role="status"></p><div id="admin" hidden><button id="refresh">Refresh</button> <button id="logout">Sign out</button><section><button id="new-user" type="button">New user</button><form id="staff" hidden><label>Name <input name="first_name" maxlength="100" required></label><label>Surname <input name="surname" maxlength="100" required></label><label>Email <input name="email" type="email" maxlength="254" required></label><button type="button" id="capture">Add card</button><p id="capture-state" role="status">Add a card before saving.</p><button id="save-staff" disabled>Save staff member</button></form></section><section><h2>Staff</h2><div class="scroll"><table><thead><tr><th>Name</th><th>Email</th><th>Card UID</th></tr></thead><tbody id="people"></tbody></table></div></section><section><h2>Clock history</h2><p id="history-caption">Latest scans in South African time</p><div class="scroll"><table><thead><tr><th>Name</th><th>Direction</th><th>Date and time</th></tr></thead><tbody id="history"></tbody></table></div><button id="newer">Newer</button> <button id="older">Older</button></section></div></main>
 <script type="module">
 const base='https://phcsslnsofaojnnxwrrj.supabase.co';
 const key="sb_publishable_P4klXq8ECCIgpeJCUQN2nw_bLcY9ZFh";
 const el = id => document.getElementById(id);
 const login=el('login'), staff=el('staff'), status=el('status');
-let token='', busy=false, page=0;
+let token='', busy=false, page=0, request='', timer, confirmed=false;
 const formatter=new Intl.DateTimeFormat('en-ZA',{timeZone:'Africa/Johannesburg',dateStyle:'medium',timeStyle:'medium'});
-async function api(path, method='GET', body) {
+async function api(path, method='GET', body, readResult=false) {
  const response=await fetch(base+path,{method,cache:'no-store',headers:{apikey:key,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})});
  if(!response.ok) throw new Error(response.status===409?'That email or card is already assigned.':response.status===401?'Sign-in failed or expired.':'Request failed ('+response.status+').');
- return response.status===204||method==='POST'&&path.startsWith('/rest')?null:response.json();
+ return response.status===204||method==='POST'&&path.startsWith('/rest')&&!readResult?null:response.json();
 }
 function rows(id,items,empty){
  const table=el(id); table.replaceChildren();
@@ -36,13 +36,42 @@ login.onsubmit=e=>{e.preventDefault();void run(async()=>{
   token=session.access_token;await refresh();login.reset();login.hidden=true;el('admin').hidden=false;
  }catch(error){token='';throw error;}finally{login.elements.password.value='';}
 });};
+function clearCapture(message='Add a card before saving.') {
+ clearInterval(timer); request=''; confirmed=false;
+ el('save-staff').disabled=true; el('capture-state').textContent=message;
+}
+async function pollCapture() {
+ const current=request;
+ if(!current||busy)return;
+ try {
+  const result=await api('/rest/v1/rpc/attendance_capture_status','POST',{p_request:current},true);
+  if(current!==request)return;
+  if(result.expired){clearCapture('Card capture expired. Click Add card to try again.');return;}
+  confirmed=result.taps===3;
+  el('save-staff').disabled=!confirmed;
+  el('capture-state').textContent=confirmed?'Card confirmed: '+result.uid+'. Save to finish.':result.taps+' of 3 taps. Lift the card between taps.';
+ }catch(error){if(current===request)el('capture-state').textContent='Could not check the scanner. Retrying…';}
+}
+el('new-user').onclick=()=>{if(busy)return;clearCapture();staff.reset();staff.hidden=false;staff.elements.first_name.focus();};
+el('capture').onclick=()=>run(async()=>{
+ if(!staff.reportValidity())return;
+ clearCapture('Starting card capture…');
+ try {
+  request=await api('/rest/v1/rpc/attendance_capture_start','POST',{},true);
+  el('capture-state').textContent='0 of 3 taps. Present the same blank card three times.';
+  timer=setInterval(pollCapture,1000);
+ }catch(error){clearCapture('Could not start card capture.');throw error;}
+});
 staff.onsubmit=e=>{e.preventDefault();void run(async()=>{
- const person=Object.fromEntries(new FormData(staff));for(const field in person)person[field]=person[field].trim();
- person.card_uid=person.card_uid.toUpperCase();await api('/rest/v1/attendance_staff','POST',person);staff.reset();
- await refresh();status.textContent='Staff member saved. Scan their card again to enroll it.';
+ if(!request||!confirmed)return;
+ const person=Object.fromEntries(new FormData(staff));
+ await api('/rest/v1/rpc/attendance_capture_save','POST',{p_request:request,p_first_name:person.first_name,p_surname:person.surname,p_email:person.email});
+ clearCapture();staff.reset();staff.hidden=true;
+ status.textContent='Staff member saved. Tap their card once more to write the attendance ID.';
+ await refresh();
 });};
 el('refresh').onclick=()=>run(async()=>{page=0;await refresh();});
 el('older').onclick=()=>run(async()=>{page++;try{await refresh();}catch(error){page--;throw error;}});
 el('newer').onclick=()=>run(async()=>{if(page===0)return;page--;try{await refresh();}catch(error){page++;throw error;}});
-el('logout').onclick=()=>run(async()=>{try{await api('/auth/v1/logout?scope=local','POST');}finally{token='';page=0;el('admin').hidden=true;login.hidden=false;el('people').replaceChildren();el('history').replaceChildren();}});
+el('logout').onclick=()=>run(async()=>{try{await api('/auth/v1/logout?scope=local','POST');}finally{token='';page=0;clearCapture();staff.reset();staff.hidden=true;el('admin').hidden=true;login.hidden=false;el('people').replaceChildren();el('history').replaceChildren();}});
 </script>
