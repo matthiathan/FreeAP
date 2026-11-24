@@ -33,6 +33,9 @@ form{display:grid;gap:10px;max-width:360px}input,button{font:inherit;padding:9px
 <div id="dashboard" hidden>
   <button id="refresh">Refresh</button> <button id="logout">Sign out</button>
   <div class="table"><table><thead><tr><th>Device</th><th>Last seen</th><th>Uplink</th><th>Signed in</th><th>Signal</th></tr></thead><tbody id="devices"></tbody></table></div>
+  <h3>Offline guest visits</h3>
+  <p id="offline-state" role="status"></p>
+  <div class="table"><table><thead><tr><th>Device</th><th>Cell number</th><th>Last synced</th></tr></thead><tbody id="offline-guests"></tbody></table></div>
   <h3>Lab completions</h3>
   <p id="completion-state" role="status"></p>
   <div class="table"><table><thead><tr><th>Cell number</th><th>Last completion</th></tr></thead><tbody id="completions"></tbody></table></div>
@@ -179,8 +182,36 @@ async function loadCompletions() {
   }
 }
 
+const offlineGuests = document.querySelector('#offline-guests');
+const offlineState = document.querySelector('#offline-state');
+
+async function loadOfflineGuests() {
+  const token = accessToken;
+  if (!token) return;
+  offlineState.textContent = 'Loading offline guest visits…';
+  try {
+    const response = await fetch(endpoint + '/rest/v1/freeap_offline_guests?select=device_id,cell_number,synced_at&order=synced_at.desc&limit=100', {
+      headers: { apikey: publishableKey, Authorization: 'Bearer ' + token },
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error();
+    const rows = await response.json();
+    if (token !== accessToken) return;
+    offlineGuests.replaceChildren();
+    for (const guest of rows) {
+      const row = offlineGuests.insertRow();
+      row.insertCell().textContent = guest.device_id;
+      row.insertCell().textContent = guest.cell_number;
+      row.insertCell().textContent = new Date(guest.synced_at).toLocaleString();
+    }
+    offlineState.textContent = rows.length ? '' : 'No offline guest visits synced.';
+  } catch {
+    if (token === accessToken) offlineState.textContent = 'Could not load offline guest visits.';
+  }
+}
+
 function refreshDashboard() {
-  return Promise.all([loadDevices(), loadCompletions()]);
+  return Promise.all([loadDevices(), loadCompletions(), loadOfflineGuests()]);
 }
 
 async function loadDevices() {
@@ -241,6 +272,8 @@ document.querySelector('#logout').addEventListener('click', () => {
   dashboard.hidden = true;
   completions.replaceChildren();
   completionState.textContent = '';
+  offlineGuests.replaceChildren();
+  offlineState.textContent = '';
   login.hidden = false;
   status.textContent = '';
   void fetch(endpoint + '/auth/v1/logout?scope=local', {
